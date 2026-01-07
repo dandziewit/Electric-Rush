@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Electric Rush - Cyberpunk Racing</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+        <div id="ui-overlay">
+            <div class="ui-left">
+                <div id="timer-display">TIME: <span id="timer-value">60</span></div>
+                <div id="lap-display">LAP: <span id="lap-value">1</span></div>
+            </div>
+            <div class="ui-center">
+                <div id="score-display">SCORE: <span id="score-value">0</span></div>
+            </div>
+            <div class="ui-right">
+                <div id="distance-display"><span id="distance-value">0</span>m</div>
+                <div id="speed-display"><span id="speed-value">0</span> MPH</div>
+            </div>
+        </div>
+        <div id="game-over-screen" class="screen hidden">
+            <h1 id="result-title">GAME OVER</h1>
+            <p id="result-message"></p>
+            <p id="final-score"></p>
+            <div id="name-input-section">
+                <p>Enter your name:</p>
+                <input type="text" id="player-name" maxlength="15" placeholder="Your Name">
+                <button id="submit-score-btn">SUBMIT SCORE</button>
+            </div>
+            <div id="leaderboard-section">
+                <h2>TOP 5 HIGH SCORES</h2>
+                <ol id="leaderboard-list"></ol>
+            </div>
+            <button id="restart-btn">RESTART</button>
+        </div>
+        <div id="start-screen" class="screen">
+            <h1>ELECTRIC RUSH</h1>
+            <div class="controls-info">
+                <h3>CONTROLS</h3>
+                <p>Move Left/Right: A/D or ← →</p>
+                <p>Speed is automatic!</p>
+                <p>Collect ⚡ for speed boost!</p>
+                <p>AVOID ALL TRAFFIC!</p>
+            </div>
+            <button id="start-btn">START GAME</button>
+        </div>
+    </div>
+    <audio id="bgMusic" loop>
+        <source src="music.mp3" type="audio/mpeg">
+        <source src="music.ogg" type="audio/ogg">
+    </audio>
+    <script src="game.js"></script>
+</body>
+</html>
