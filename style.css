@@ -63,6 +63,7 @@ body {
 
 #timer-display,
 #lap-display,
+#lives-display,
 #distance-display,
 #speed-display,
 #score-display {
@@ -87,6 +88,7 @@ body {
 #distance-value,
 #speed-value,
 #lap-value,
+#lives-value,
 #score-value {
     color: #0ff;
     font-size: 20px;

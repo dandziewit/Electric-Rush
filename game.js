@@ -123,6 +123,7 @@ const game = {
     score: 0,
     timer: CONFIG.INITIAL_LAP_TIME,
     lastTime: 0,
+    lives: 10, // Lives system
     
     // Difficulty scaling - Exponential curve
     currentSpeedBonus: 0,
@@ -268,6 +269,7 @@ function startGame() {
     game.lastTime = performance.now();
     game.lastTrafficSpawn = 0;
     game.lastPowerupSpawn = 0;
+    game.lives = 10; // Reset lives to 10
     
     // Reset difficulty
     game.currentSpeedBonus = 0;
@@ -631,6 +633,7 @@ function updateUI() {
     document.getElementById('speed-value').textContent = mph;
     
     document.getElementById('lap-value').textContent = game.currentLap;
+    document.getElementById('lives-value').textContent = game.lives;
     document.getElementById('score-value').textContent = Math.floor(game.score);
 }
 
@@ -899,8 +902,17 @@ function handleCollision(car) {
     game.player.speed *= CONFIG.COLLISION_PENALTY;
     game.player.targetSpeed *= CONFIG.COLLISION_PENALTY;
     
+    // Lose a life
+    game.lives--;
+    
     // Score penalty for collision
     game.score = Math.max(0, game.score - 250);
+    
+    // Check if game over (no lives left)
+    if (game.lives <= 0) {
+        endGame('lives');
+        return;
+    }
     
     // Strong screen shake
     game.screenShake.intensity = CONFIG.SCREEN_SHAKE_INTENSITY * 1.5;
@@ -1575,7 +1587,7 @@ function submitScore(name, score) {
 // =======================
 // GAME END
 // =======================
-function endGame() {
+function endGame(reason = 'time') {
     game.state = 'gameOver';
     
     // Stop music
@@ -1589,9 +1601,15 @@ function endGame() {
     const message = document.getElementById('result-message');
     const finalScore = document.getElementById('final-score');
     
-    title.textContent = 'TIME\'S UP!';
-    title.style.color = '#f00';
-    message.textContent = `You completed ${game.currentLap - 1} lap${game.currentLap - 1 !== 1 ? 's' : ''}!`;
+    if (reason === 'lives') {
+        title.textContent = 'NO LIVES LEFT!';
+        title.style.color = '#f00';
+        message.textContent = `You completed ${game.currentLap - 1} lap${game.currentLap - 1 !== 1 ? 's' : ''}!`;
+    } else {
+        title.textContent = 'TIME\'S UP!';
+        title.style.color = '#f00';
+        message.textContent = `You completed ${game.currentLap - 1} lap${game.currentLap - 1 !== 1 ? 's' : ''}!`;
+    }
     finalScore.textContent = `Final Score: ${Math.floor(game.score)}`;
     
     // Show name input section and update leaderboard
