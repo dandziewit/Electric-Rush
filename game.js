@@ -12,7 +12,7 @@ const CONFIG = {
     MIN_SPEED: 3, // Minimum after collisions
     ACCELERATION: 0.5, // Faster acceleration feel
     DECELERATION: 0.3, // Faster braking
-    LANE_CHANGE_SPEED: 22, // MUCH faster reflexes for dodging (was 15)
+    LANE_CHANGE_SPEED: 16, // Smoother lane transitions
     LANE_SNAP_THRESHOLD: 0.15, // Snap to lane when within this distance
     
     // Timer & distance (per lap) - TIME is the main challenge, not traffic
@@ -42,13 +42,6 @@ const CONFIG = {
     TRAFFIC_BASE_SPEED: 2.5, // Slower than player for dodging opportunities
     TRAFFIC_SPEED_VARIANCE: 2, // Speed randomization for dynamic patterns
     MIN_TRAFFIC_DISTANCE: 105, // More spacing to avoid clutter (was 100)
-    
-    // Jump mechanics - Arcade tight
-    JUMP_DURATION: 0.45, // Higher, more satisfying jump (was 0.35)
-    JUMP_HEIGHT: 80, // Much higher jump for better clearance (was 55)
-    JUMP_COOLDOWN: 0.8, // Faster cooldown base (was 1.0)
-    JUMP_BUFFER_TIME: 0.15, // Early input buffering (seconds)
-    JUMP_HITSTOP_DURATION: 0.08, // Landing impact freeze (seconds)
     
     // Power-ups
     POWERUP_SPAWN_INTERVAL: 5000, // Every 5 seconds (was 7000)
@@ -81,7 +74,46 @@ const CONFIG = {
     // Road
     NUM_LANES: 4,
     LANE_MARKER_SPEED: 10,
-    ROAD_GLOW_INTENSITY: 0.5
+    ROAD_GLOW_INTENSITY: 0.5,
+
+    // Derived / display constants
+    SPEED_MPH_CAP: 14.97,  // Internal speed where display reads 93 MPH (speed × 10 × 0.621371)
+    INITIAL_LIVES: 10
+};
+
+// =======================
+// PARTICLE CONFIG
+// Each entry overrides only the properties that differ from addParticle()'s defaults.
+// vxMult/vyMult multiply the base random velocity. vySet/vxSet replace it entirely.
+// vyAdd adds to the base vy (use for directional biasing like 'electric').
+// =======================
+const PARTICLE_PRESETS = {
+    electric: {
+        color:   () => `hsl(${180 + Math.random() * 60}, 100%, ${70 + Math.random() * 20}%)`,
+        vyAdd: 3, vxMult: 2, life: 0.4,
+        size:    () => Math.random() * 2 + 1
+    },
+    impact: {
+        color:   () => `hsl(${Math.random() * 60}, 100%, 50%)`,
+        vxMult: 4, vyMult: 4, life: 0.6,
+        size:    () => Math.random() * 5 + 3
+    },
+    collect: {
+        color:   () => `hsl(${180 + Math.random() * 60}, 100%, 60%)`,
+        vxMult: 3, vyMult: 3, life: 1.2,
+        size:    () => Math.random() * 4 + 2
+    },
+    celebrate: {
+        color:   () => `hsl(${Math.random() * 360}, 100%, 60%)`,
+        vxSet:   () => (Math.random() - 0.5) * 10,
+        vySet:   () => -Math.random() * 10 - 8, life: 2.0,
+        size:    () => Math.random() * 6 + 3
+    },
+    nearmiss: {
+        color:   () => `hsl(60, 100%, ${60 + Math.random() * 20}%)`,
+        vxMult: 1.5, vyMult: 1.5, life: 0.4,
+        size:    () => Math.random() * 3 + 2
+    }
 };
 
 // =======================
@@ -104,16 +136,10 @@ const game = {
         targetLane: 1.5,
         speed: CONFIG.BASE_SPEED,
         targetSpeed: CONFIG.BASE_SPEED,
+        brakeLightIntensity: 0,
         boosted: false,
         boostEndTime: 0,
-        
-        // Jump mechanics
-        isJumping: false,
-        jumpProgress: 0, // 0 to 1
-        jumpCooldown: 0,
-        jumpHeight: 0, // current height off ground
-        jumpBuffered: false, // Jump input buffering
-        jumpBufferTime: 0
+
     },
     
     // Game progress
@@ -123,7 +149,7 @@ const game = {
     score: 0,
     timer: CONFIG.INITIAL_LAP_TIME,
     lastTime: 0,
-    lives: 10, // Lives system
+    lives: CONFIG.INITIAL_LIVES,
     
     // Difficulty scaling - Exponential curve
     currentSpeedBonus: 0,
@@ -138,6 +164,7 @@ const game = {
     powerups: [],
     particles: [],
     speedLines: [], // for motion blur effect
+    skidMarks: [],
     
     // Timers
     lastTrafficSpawn: 0,
@@ -151,13 +178,16 @@ const game = {
     cameraZoom: 1.0, // Dynamic zoom at high speed
     
     // Near-miss tracking
-    nearMissTracking: new Map(), // Track cars we've near-missed
+    nearMissTracking: new Set(), // Cars we've near-missed this lap
     nearMissCooldown: 0,
     
     // Input
     keys: {},
     lastPressedKey: null,
     
+    // Cached DOM references (populated in init to avoid per-frame getElementById)
+    ui: null,
+
     // Audio
     bgMusic: null,
     musicMuted: false,
@@ -214,6 +244,18 @@ function init() {
     
     // Setup UI
     setupUI();
+
+    // Cache UI DOM elements — queried once here instead of inside the hot updateUI() path
+    game.ui = {
+        timer:        document.getElementById('timer-value'),
+        timerDisplay: document.getElementById('timer-display'),
+        distance:     document.getElementById('distance-value'),
+        speed:        document.getElementById('speed-value'),
+        lap:          document.getElementById('lap-value'),
+        lives:        document.getElementById('lives-value'),
+        score:        document.getElementById('score-value'),
+        lapFlash:     document.getElementById('lap-flash')
+    };
     
     // Start game loop
     requestAnimationFrame(gameLoop);
@@ -235,23 +277,62 @@ function setupInput() {
             game.lastPressedKey = null;
         }
     });
+
+    // Touch controls — swipe left/right for lanes
+    let touchStartX = 0;
+    let touchStartY = 0;
+
+    game.canvas.addEventListener('touchstart', (e) => {
+        touchStartX = e.touches[0].clientX;
+        touchStartY = e.touches[0].clientY;
+        e.preventDefault();
+    }, { passive: false });
+
+    game.canvas.addEventListener('touchend', (e) => {
+        const dx = e.changedTouches[0].clientX - touchStartX;
+        const dy = e.changedTouches[0].clientY - touchStartY;
+        if (Math.abs(dx) > 30) {
+            game.lastPressedKey = dx < 0 ? 'arrowleft' : 'arrowright';
+        }
+        e.preventDefault();
+    }, { passive: false });
 }
 
 function setupUI() {
-    document.getElementById('start-btn').addEventListener('click', startGame);
-    document.getElementById('restart-btn').addEventListener('click', restartGame);
-    document.getElementById('submit-score-btn').addEventListener('click', () => {
-        const name = document.getElementById('player-name').value;
-        submitScore(name, game.score);
-    });
-    
+    const startBtn = document.getElementById('start-btn');
+    const restartBtn = document.getElementById('restart-btn');
+    const submitScoreBtn = document.getElementById('submit-score-btn');
+    const nameInput = document.getElementById('player-name');
+    const muteBtn = document.getElementById('mute-btn');
+
+    const submitCurrentScore = () => {
+        if (!nameInput) return;
+        submitScore(nameInput.value, game.score);
+    };
+
+    if (startBtn) startBtn.addEventListener('click', startGame);
+    if (restartBtn) restartBtn.addEventListener('click', restartGame);
+    if (submitScoreBtn) submitScoreBtn.addEventListener('click', submitCurrentScore);
+
     // Allow Enter key to submit score
-    document.getElementById('player-name').addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') {
-            const name = document.getElementById('player-name').value;
-            submitScore(name, game.score);
-        }
-    });
+    if (nameInput) {
+        nameInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') submitCurrentScore();
+        });
+    }
+
+    // Mute button
+    if (muteBtn) {
+        muteBtn.addEventListener('click', () => {
+            game.musicMuted = !game.musicMuted;
+            muteBtn.textContent = game.musicMuted ? '🔇' : '🔊';
+            if (game.musicMuted) {
+                game.bgMusic?.pause();
+            } else if (game.state === 'playing') {
+                game.bgMusic?.play().catch(() => {});
+            }
+        });
+    }
 }
 
 function startGame() {
@@ -269,7 +350,7 @@ function startGame() {
     game.lastTime = performance.now();
     game.lastTrafficSpawn = 0;
     game.lastPowerupSpawn = 0;
-    game.lives = 10; // Reset lives to 10
+    game.lives = CONFIG.INITIAL_LIVES;
     
     // Reset difficulty
     game.currentSpeedBonus = 0;
@@ -283,14 +364,10 @@ function startGame() {
     game.player.targetLane = 1.5;
     game.player.speed = CONFIG.BASE_SPEED;
     game.player.targetSpeed = CONFIG.BASE_SPEED;
+    game.player.brakeLightIntensity = 0;
     game.player.boosted = false;
-    game.player.y = CONFIG.CANVAS_HEIGHT - 150;
-    game.player.isJumping = false;
-    game.player.jumpProgress = 0;
-    game.player.jumpCooldown = 0;
-    game.player.jumpHeight = 0;
-    game.player.jumpBuffered = false;
-    game.player.jumpBufferTime = 0;
+    game.player.y = getPlayerRenderY();
+    game.player.y = getPlayerRenderY();
     
     // Start background music
     if (game.bgMusic && !game.musicMuted) {
@@ -302,6 +379,7 @@ function startGame() {
     game.powerups = [];
     game.particles = [];
     game.speedLines = [];
+    game.skidMarks = [];
     game.nearMissTracking.clear();
     game.nearMissCooldown = 0;
     
@@ -394,9 +472,10 @@ function update(deltaTime, timestamp) {
     }
     
     // Update entities
-    updateTraffic(deltaTime);
+    updateTraffic(deltaTime, timestamp);
     updatePowerups(deltaTime, timestamp);
     updateParticles(deltaTime);
+    updateSkidMarks(deltaTime);
     updateSpeedLines(deltaTime);
     
     // Check boost expiration
@@ -436,7 +515,7 @@ function handleInput(deltaTime, timestamp) {
     
     if (game.lastPressedKey === 'd' || game.lastPressedKey === 'arrowright') {
         const currentLaneInt = Math.round(game.player.currentLane);
-        game.player.targetLane = Math.min(3, currentLaneInt + 1);
+        game.player.targetLane = Math.min(CONFIG.NUM_LANES - 1, currentLaneInt + 1);
         game.lastPressedKey = null; // Clear to prevent repeat
     }
     
@@ -444,32 +523,40 @@ function handleInput(deltaTime, timestamp) {
     // Speed automatically increases each lap (Taxi Rush style)
     // Only modified by lightning bolt power-ups
     
-    // Jump - INSTANT response when space pressed
-    if (game.lastPressedKey === ' ' || game.lastPressedKey === 'space') {
-        if (!game.player.isJumping) {
-            initiateJump(timestamp);
-            game.lastPressedKey = null; // Clear to prevent repeat
-        }
-    }
 }
 
 function updatePlayer(deltaTime) {
+    const prevLane = game.player.currentLane;
+
     // Smooth lane transition (fast snapping)
     game.player.currentLane += (game.player.targetLane - game.player.currentLane) * CONFIG.LANE_CHANGE_SPEED * deltaTime;
     
     // AUTOMATIC FORWARD SPEED (Taxi Rush style)
     // Speed is determined by lap difficulty and power-ups, not player input
-    // 14.97 internal speed = 93 MPH (speed * 10 * 0.621371)
-    const automaticSpeed = Math.min(14.97, CONFIG.BASE_SPEED + game.currentSpeedBonus);
-    game.player.targetSpeed = game.player.boosted ? 
-        Math.min(14.97, automaticSpeed * CONFIG.BOOST_SPEED_MULTIPLIER) : 
+    const automaticSpeed = Math.min(CONFIG.SPEED_MPH_CAP, CONFIG.BASE_SPEED + game.currentSpeedBonus);
+    game.player.targetSpeed = game.player.boosted ?
+        Math.min(CONFIG.SPEED_MPH_CAP, automaticSpeed * CONFIG.BOOST_SPEED_MULTIPLIER) :
         automaticSpeed;
     
     // Smooth speed transition
-    game.player.speed += (game.player.targetSpeed - game.player.speed) * 5 * deltaTime;
+        game.player.speed += (game.player.targetSpeed - game.player.speed) * 4.2 * deltaTime;
+
+    // Brake intensity reacts to active deceleration and collision recovery
+    const brakingDelta = Math.max(0, game.player.speed - game.player.targetSpeed);
+    const collisionBrakeBoost = game.collisionCooldown > 0 ? 0.65 : 0;
+    game.player.brakeLightIntensity = Math.min(1, (brakingDelta * 0.35) + collisionBrakeBoost);
     
     // Calculate player position - center in lane
     game.player.x = game.roadLeft + (game.player.currentLane * game.laneWidth) + (game.laneWidth / 2) - (game.player.width / 2);
+    game.player.y = getPlayerRenderY();
+
+    // Generate short skid marks when lane-switching hard at speed
+    const lateralShift = Math.abs(game.player.currentLane - prevLane);
+    if (lateralShift > 0.016 && game.player.speed > 8 && Math.random() < 0.55) {
+        const intensity = Math.min(1, (lateralShift * 30) + (game.player.speed / CONFIG.MAX_SPEED) * 0.5);
+        addSkidMark(game.player.x + 4, game.player.y + game.player.height - 4, intensity);
+        addSkidMark(game.player.x + game.player.width - 8, game.player.y + game.player.height - 4, intensity);
+    }
     
     // Add particles when boosted (electric arcs)
     if (game.player.boosted && Math.random() < 0.9) {
@@ -488,7 +575,7 @@ function updatePlayer(deltaTime) {
     game.cameraZoom += (targetZoom - game.cameraZoom) * 3 * deltaTime;
 }
 
-function updateTraffic(deltaTime) {
+function updateTraffic(deltaTime, timestamp) {
     // Update near-miss cooldown
     if (game.nearMissCooldown > 0) {
         game.nearMissCooldown -= deltaTime;
@@ -500,12 +587,11 @@ function updateTraffic(deltaTime) {
         // Move car - normal movement
         car.y += (game.player.speed + car.speed) * deltaTime * 60;
         
-        // Scale effect for depth (cars get bigger as they approach)
-        const depthFactor = Math.max(0.7, Math.min(1.3, 1 + (car.y - 200) / 600));
-        car.scale = depthFactor;
+        // Top-down view keeps car scale consistent
+        car.scale = 1;
         
         // Remove if off screen
-        if (car.y > CONFIG.CANVAS_HEIGHT + 100) {
+            if (car.y > CONFIG.CANVAS_HEIGHT + 180) {
             game.traffic.splice(i, 1);
             game.nearMissTracking.delete(car);
             continue;
@@ -518,9 +604,9 @@ function updateTraffic(deltaTime) {
             }
         }
         
-        // Check collision - NO JUMPING to avoid
+        // Check collision
         if (checkCollision(game.player, car) && game.collisionCooldown <= 0) {
-            handleCollision(car);
+            handleCollision(car, timestamp);
         }
     }
     
@@ -548,7 +634,7 @@ function checkNearMiss(player, car) {
 
 function handleNearMiss(car) {
     // Mark this car as near-missed
-    game.nearMissTracking.set(car, true);
+    game.nearMissTracking.add(car);
     
     // Score bonus
     game.score += CONFIG.NEAR_MISS_SCORE;
@@ -606,6 +692,31 @@ function updateParticles(deltaTime) {
     }
 }
 
+function addSkidMark(x, y, intensity) {
+    game.skidMarks.push({
+        x,
+        y,
+        width: 2 + intensity * 2,
+        length: 10 + intensity * 10,
+        alpha: 0.25 + intensity * 0.25,
+        life: 0.8 + intensity * 0.5,
+        maxLife: 0.8 + intensity * 0.5,
+        drift: (Math.random() - 0.5) * 0.15
+    });
+}
+
+function updateSkidMarks(deltaTime) {
+    for (let i = game.skidMarks.length - 1; i >= 0; i--) {
+        const mark = game.skidMarks[i];
+        mark.y += game.player.speed * deltaTime * 45;
+        mark.x += mark.drift;
+        mark.life -= deltaTime;
+        if (mark.life <= 0 || mark.y > CONFIG.CANVAS_HEIGHT + 80) {
+            game.skidMarks.splice(i, 1);
+        }
+    }
+}
+
 function updateScreenShake(timestamp) {
     if (timestamp < game.screenShake.endTime) {
         const intensity = game.screenShake.intensity;
@@ -623,38 +734,25 @@ function updateDamageFlash(timestamp) {
 }
 
 function updateUI() {
-    document.getElementById('timer-value').textContent = Math.ceil(game.timer);
-    // Show distance with lap's total distance (increases per lap)
-    document.getElementById('distance-value').textContent = Math.floor(game.lapDistance) + '/' + game.currentFinishDistance;
-    
-    // Display speed in MPH (Miles Per Hour)
-    // Internal speed × 10 gives km/h, then × 0.621371 converts to MPH
-    const mph = Math.floor(game.player.speed * 10 * 0.621371);
-    document.getElementById('speed-value').textContent = mph;
-    
-    document.getElementById('lap-value').textContent = game.currentLap;
-    document.getElementById('lives-value').textContent = game.lives;
-    document.getElementById('score-value').textContent = Math.floor(game.score);
+    game.ui.timer.textContent    = Math.ceil(game.timer);
+    game.ui.distance.textContent = Math.floor(game.lapDistance) + '/' + game.currentFinishDistance;
+    // Internal speed × 10 = km/h, × 0.621371 converts to MPH
+    game.ui.speed.textContent    = Math.floor(game.player.speed * 10 * 0.621371);
+    game.ui.lap.textContent      = game.currentLap;
+    game.ui.lives.textContent    = game.lives;
+    game.ui.score.textContent    = Math.floor(game.score);
+
+    // Pulse the timer red when 10 seconds or fewer remain
+    game.ui.timerDisplay.classList.toggle('timer-warning', game.timer > 0 && game.timer <= 10);
+}
+
+function getPlayerRenderY() {
+    return CONFIG.CANVAS_HEIGHT - game.player.height - 34;
 }
 
 // =======================
 // NEW GAME MECHANICS
 // =======================
-function initiateJump(timestamp) {
-    game.player.isJumping = true;
-    game.player.jumpProgress = 0;
-    game.player.jumpBuffered = false; // Clear buffer
-    
-    // Jump particles - electric burst
-    for (let i = 0; i < 20; i++) {
-        addParticle(
-            game.player.x + game.player.width / 2 + (Math.random() - 0.5) * game.player.width,
-            game.player.y + game.player.height,
-            'jump'
-        );
-    }
-}
-
 function completeLap() {
     game.currentLap++;
     game.lapDistance = 0;
@@ -767,7 +865,12 @@ function completeLap() {
     // DON'T clear traffic - keeps gameplay flowing without delay
     // Traffic continues seamlessly into next lap
     game.nearMissTracking.clear();
-    
+
+    // Lap complete banner
+    game.ui.lapFlash.textContent = `LAP ${game.currentLap - 1} COMPLETE!`;
+    game.ui.lapFlash.classList.remove('hidden');
+    setTimeout(() => game.ui.lapFlash.classList.add('hidden'), 1500);
+
     // Celebration particles - explosive
     for (let i = 0; i < 80; i++) {
         addParticle(
@@ -813,7 +916,7 @@ function spawnTraffic() {
     // Higher laps = more cars spawned simultaneously = much harder dodging
     
     const carsToSpawn = game.carsPerSpawn;
-    const availableLanes = [0, 1, 2, 3];
+    const availableLanes = Array.from({ length: CONFIG.NUM_LANES }, (_, i) => i);
     const spawnedLanes = [];
     
     // Apply gap reduction from difficulty scaling
@@ -855,7 +958,7 @@ function spawnTraffic() {
             
             game.traffic.push({
                 x: game.roadLeft + lane * game.laneWidth + game.laneWidth / 2 - 25,
-                y: -100,
+                y: -180,
                 width: 50,
                 height: type === 'suv' ? 90 : 80,
                 speed: CONFIG.TRAFFIC_BASE_SPEED + (Math.random() - 0.5) * CONFIG.TRAFFIC_SPEED_VARIANCE,
@@ -892,10 +995,10 @@ function checkCollision(a, b) {
            a.y + a.height > b.y;
 }
 
-function handleCollision(car) {
+function handleCollision(car, timestamp) {
     // Hit-stop effect (freeze frame for impact)
     game.hitStop.active = true;
-    game.hitStop.endTime = performance.now() + CONFIG.COLLISION_HITSTOP * 1000;
+    game.hitStop.endTime = timestamp + CONFIG.COLLISION_HITSTOP * 1000;
     
     // MASSIVE SPEED PENALTY - Collision is very punishing
     // Player loses most of their speed and must recover
@@ -916,11 +1019,11 @@ function handleCollision(car) {
     
     // Strong screen shake
     game.screenShake.intensity = CONFIG.SCREEN_SHAKE_INTENSITY * 1.5;
-    game.screenShake.endTime = performance.now() + CONFIG.SCREEN_SHAKE_DURATION * 1.5;
+    game.screenShake.endTime = timestamp + CONFIG.SCREEN_SHAKE_DURATION * 1.5;
     
     // Damage flash
     game.damageFlash.active = true;
-    game.damageFlash.endTime = performance.now() + CONFIG.COLLISION_DURATION;
+    game.damageFlash.endTime = timestamp + CONFIG.COLLISION_DURATION;
     
     // Collision cooldown
     game.collisionCooldown = 1;
@@ -959,71 +1062,29 @@ function collectPowerup(timestamp) {
 }
 
 function addParticle(x, y, type) {
+    // Start with defaults, then apply the preset's overrides
     const particle = {
-        x: x,
-        y: y,
+        x, y,
         vx: (Math.random() - 0.5) * 5,
         vy: (Math.random() - 0.5) * 5,
-        life: 1,
-        maxLife: 1,
-        alpha: 1,
+        life: 1, maxLife: 1, alpha: 1,
         size: Math.random() * 3 + 2,
         color: '#0ff'
     };
-    
-    if (type === 'electric') {
-        // Electric arc particles - crackle effect
-        particle.color = `hsl(${180 + Math.random() * 60}, 100%, ${70 + Math.random() * 20}%)`;
-        particle.vy += 3;
-        particle.vx *= 2;
-        particle.life = 0.4;
-        particle.maxLife = 0.4;
-        particle.size = Math.random() * 2 + 1;
-    } else if (type === 'impact') {
-        particle.color = `hsl(${Math.random() * 60}, 100%, 50%)`; // Red-orange
-        particle.vx *= 4;
-        particle.vy *= 4;
-        particle.life = 0.6;
-        particle.maxLife = 0.6;
-        particle.size = Math.random() * 5 + 3;
-    } else if (type === 'collect') {
-        // Explosive collection effect
-        particle.color = `hsl(${180 + Math.random() * 60}, 100%, 60%)`;
-        particle.vx *= 3;
-        particle.vy *= 3;
-        particle.life = 1.2;
-        particle.maxLife = 1.2;
-        particle.size = Math.random() * 4 + 2;
-    } else if (type === 'jump') {
-        particle.color = `hsl(${180 + Math.random() * 60}, 100%, 70%)`;
-        particle.vy = -Math.random() * 4 - 3;
-        particle.vx *= 1.5;
-        particle.life = 0.5;
-        particle.maxLife = 0.5;
-    } else if (type === 'landing') {
-        particle.color = `rgba(255, 255, 255, ${0.6 + Math.random() * 0.4})`;
-        particle.vx *= 2;
-        particle.vy = -Math.random() * 3;
-        particle.life = 0.3;
-        particle.maxLife = 0.3;
-        particle.size = Math.random() * 3 + 2;
-    } else if (type === 'celebrate') {
-        particle.color = `hsl(${Math.random() * 360}, 100%, 60%)`;
-        particle.vx = (Math.random() - 0.5) * 10;
-        particle.vy = -Math.random() * 10 - 8;
-        particle.life = 2.0;
-        particle.maxLife = 2.0;
-        particle.size = Math.random() * 6 + 3;
-    } else if (type === 'nearmiss') {
-        // Near-miss indicator - yellow flash
-        particle.color = `hsl(60, 100%, ${60 + Math.random() * 20}%)`;
-        particle.vx *= 1.5;
-        particle.vy *= 1.5;
-        particle.life = 0.4;
-        particle.maxLife = 0.4;
-        particle.size = Math.random() * 3 + 2;
+
+    const preset = PARTICLE_PRESETS[type];
+    if (preset) {
+        particle.color   = preset.color();
+        particle.life    = preset.life;
+        particle.maxLife = preset.life;
+        if (preset.size   !== undefined) particle.size = preset.size();
+        if (preset.vxMult !== undefined) particle.vx  *= preset.vxMult;
+        if (preset.vyMult !== undefined) particle.vy  *= preset.vyMult;
+        if (preset.vyAdd  !== undefined) particle.vy  += preset.vyAdd;
+        if (preset.vxSet  !== undefined) particle.vx   = preset.vxSet();
+        if (preset.vySet  !== undefined) particle.vy   = preset.vySet();
     }
-    
+
     game.particles.push(particle);
 }
 
@@ -1058,6 +1119,7 @@ function render() {
     
     // Draw road
     drawRoad();
+    drawSkidMarks();
     
     // Draw entities
     drawTraffic();
@@ -1072,6 +1134,39 @@ function render() {
     }
     
     ctx.restore();
+}
+
+function projectToRoadPerspective(x, y, width, height) {
+    const projectedCenterX = x + width / 2;
+    const projectedY = y + height;
+    const projectedScale = 1;
+    const depth = Math.max(0, Math.min(1, (y + height) / CONFIG.CANVAS_HEIGHT));
+    const roadWidthAtDepth = game.roadWidth;
+
+    return {
+        x: projectedCenterX,
+        y: projectedY,
+        scale: projectedScale,
+        depth,
+        roadWidthAtDepth
+    };
+}
+
+function drawSkidMarks() {
+    const ctx = game.ctx;
+
+    for (const mark of game.skidMarks) {
+        const p = projectToRoadPerspective(mark.x, mark.y, mark.width, mark.length);
+        const alpha = Math.max(0, (mark.life / mark.maxLife) * mark.alpha * (0.4 + p.depth));
+
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.translate(p.x, p.y);
+        ctx.scale(p.scale, p.scale * 1.25);
+        ctx.fillStyle = 'rgba(10, 10, 10, 0.9)';
+        ctx.fillRect(-mark.width / 2, -mark.length / 2, mark.width, mark.length);
+        ctx.restore();
+    }
 }
 
 function drawBackground() {
@@ -1140,60 +1235,65 @@ function drawSpeedLines() {
 function drawRoad() {
     const ctx = game.ctx;
     const roadCenterX = CONFIG.CANVAS_WIDTH / 2;
-    
-    // Road gradient with glow
-    const gradient = ctx.createLinearGradient(0, 0, 0, CONFIG.CANVAS_HEIGHT);
-    gradient.addColorStop(0, '#0a0a0a');
-    gradient.addColorStop(0.5, '#1a1a1a');
-    gradient.addColorStop(1, '#0a0a0a');
-    
-    ctx.fillStyle = gradient;
+
+    // Top-down asphalt slab
+    const asphalt = ctx.createLinearGradient(0, 0, 0, CONFIG.CANVAS_HEIGHT);
+    asphalt.addColorStop(0, '#0a0d12');
+    asphalt.addColorStop(0.5, '#1a1f26');
+    asphalt.addColorStop(1, '#0e1319');
+    ctx.fillStyle = asphalt;
     ctx.fillRect(game.roadLeft, 0, game.roadWidth, CONFIG.CANVAS_HEIGHT);
-    
-    // Road edge glow (stronger at high speed and boost)
+
+    // Side shoulder glow
     const speedIntensity = Math.min(1, game.player.speed / CONFIG.MAX_SPEED);
-    const boostMultiplier = game.player.boosted ? 1.8 : 1;
-    const glowIntensity = (0.4 + speedIntensity * 0.5) * boostMultiplier;
-    
-    ctx.shadowBlur = (20 + speedIntensity * 30) * boostMultiplier;
-    ctx.shadowColor = `rgba(0, 255, 255, ${Math.min(1, glowIntensity)})`;
-    ctx.strokeStyle = `rgba(0, 255, 255, ${Math.min(1, glowIntensity)})`;
-    ctx.lineWidth = game.player.boosted ? 3 : 2;
+    const edgeAlpha = 0.25 + speedIntensity * 0.35;
+    ctx.shadowBlur = 12 + speedIntensity * 20;
+    ctx.shadowColor = `rgba(0, 255, 255, ${edgeAlpha})`;
+    ctx.strokeStyle = `rgba(0, 255, 255, ${edgeAlpha})`;
+    ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(game.roadLeft, 0);
     ctx.lineTo(game.roadLeft, CONFIG.CANVAS_HEIGHT);
     ctx.stroke();
-    
     ctx.beginPath();
     ctx.moveTo(game.roadLeft + game.roadWidth, 0);
     ctx.lineTo(game.roadLeft + game.roadWidth, CONFIG.CANVAS_HEIGHT);
     ctx.stroke();
-    
     ctx.shadowBlur = 0;
-    
-    // Lane markers with animation
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+
+    // Lane separators (top-down dashed markers)
+    ctx.strokeStyle = 'rgba(245, 245, 245, 0.42)';
     ctx.lineWidth = 2;
-    ctx.setLineDash([20, 20]);
-    
+    ctx.setLineDash([22, 18]);
     for (let i = 1; i < CONFIG.NUM_LANES; i++) {
         const x = game.roadLeft + i * game.laneWidth;
         ctx.save();
         ctx.translate(0, -game.laneMarkerOffset);
         ctx.beginPath();
-        ctx.moveTo(x, -60);
-        ctx.lineTo(x, CONFIG.CANVAS_HEIGHT + 60);
+        ctx.moveTo(x, -70);
+        ctx.lineTo(x, CONFIG.CANVAS_HEIGHT + 70);
         ctx.stroke();
         ctx.restore();
     }
-    
     ctx.setLineDash([]);
-    
+
+    // Subtle road texture streaks
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 18; i++) {
+        const y = (i * 48 + game.backgroundOffset * 0.25) % CONFIG.CANVAS_HEIGHT;
+        const inset = 10 + (Math.sin(i * 0.7) * 4);
+        ctx.beginPath();
+        ctx.moveTo(game.roadLeft + inset, y);
+        ctx.lineTo(game.roadLeft + game.roadWidth - inset, y + 8);
+        ctx.stroke();
+    }
+
     // Lap progress indicator - uses current lap's finish distance
     const distanceToFinish = game.currentFinishDistance - game.lapDistance;
     if (distanceToFinish < 500 && distanceToFinish > 0) {
         const finishY = CONFIG.CANVAS_HEIGHT * (1 - distanceToFinish / 500);
-        
+
         ctx.strokeStyle = `rgba(0, 255, 0, ${Math.sin(performance.now() * 0.01) * 0.3 + 0.5})`;
         ctx.lineWidth = 4;
         ctx.setLineDash([10, 10]);
@@ -1217,204 +1317,252 @@ function drawRoad() {
 function drawPlayer() {
     const ctx = game.ctx;
     const p = game.player;
-    
+
     ctx.save();
-    
+
+    const bodyX = p.x;
+    const bodyY = p.y;
+    const bodyW = p.width;
+    const bodyH = p.height;
+
+    // Reflection pass
+    ctx.save();
+    ctx.translate(bodyX + bodyW / 2, bodyY + bodyH + 8);
+    ctx.scale(1, -0.30);
+    ctx.fillStyle = 'rgba(255, 140, 80, 0.13)';
+    ctx.beginPath();
+    ctx.moveTo(-bodyW * 0.46, 0);
+    ctx.lineTo(bodyW * 0.46, 0);
+    ctx.lineTo(bodyW * 0.32, bodyH * 0.74);
+    ctx.lineTo(-bodyW * 0.32, bodyH * 0.74);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
     // Boost glow
     if (p.boosted) {
         ctx.shadowBlur = 40;
         ctx.shadowColor = 'rgba(0, 255, 255, 1)';
-        
+
         // Electric aura (pulsing)
         const pulse = Math.sin(performance.now() * 0.01) * 0.3 + 0.7;
         ctx.strokeStyle = `rgba(0, 255, 255, ${pulse})`;
         ctx.lineWidth = 4;
-        ctx.strokeRect(p.x - 8, p.y - 8, p.width + 16, p.height + 16);
+        ctx.strokeRect(bodyX - 8, bodyY - 8, bodyW + 16, bodyH + 16);
     }
-    
-    // IMPROVED CYBERTRUCK - angular futuristic design
-    // Base metallic color with gradient
-    const bodyGradient = ctx.createLinearGradient(p.x, p.y, p.x + p.width, p.y);
-    bodyGradient.addColorStop(0, '#666');
-    bodyGradient.addColorStop(0.5, '#999');
-    bodyGradient.addColorStop(1, '#666');
+
+    // New vehicle style: angular diamond racer
+    const bodyGradient = ctx.createLinearGradient(bodyX, bodyY, bodyX + bodyW, bodyY + bodyH);
+    bodyGradient.addColorStop(0, '#2244d8');
+    bodyGradient.addColorStop(0.45, '#57a2ff');
+    bodyGradient.addColorStop(1, '#1a2b87');
     ctx.fillStyle = bodyGradient;
-    
-    // Main body
+
     ctx.beginPath();
-    ctx.moveTo(p.x + p.width * 0.5, p.y); // Top center
-    ctx.lineTo(p.x + p.width * 0.9, p.y + p.height * 0.3); // Top right
-    ctx.lineTo(p.x + p.width, p.y + p.height * 0.7); // Bottom right
-    ctx.lineTo(p.x + p.width * 0.8, p.y + p.height); // Bottom right corner
-    ctx.lineTo(p.x + p.width * 0.2, p.y + p.height); // Bottom left corner
-    ctx.lineTo(p.x, p.y + p.height * 0.7); // Bottom left
-    ctx.lineTo(p.x + p.width * 0.1, p.y + p.height * 0.3); // Top left
+    ctx.moveTo(bodyX + bodyW * 0.50, bodyY + 0);
+    ctx.lineTo(bodyX + bodyW * 0.92, bodyY + bodyH * 0.32);
+    ctx.lineTo(bodyX + bodyW * 0.70, bodyY + bodyH * 0.96);
+    ctx.lineTo(bodyX + bodyW * 0.30, bodyY + bodyH * 0.96);
+    ctx.lineTo(bodyX + bodyW * 0.08, bodyY + bodyH * 0.32);
     ctx.closePath();
     ctx.fill();
-    
-    // Metallic highlights
-    const highlightGradient = ctx.createLinearGradient(p.x, p.y, p.x + p.width, p.y);
-    highlightGradient.addColorStop(0, 'rgba(200, 200, 200, 0.3)');
-    highlightGradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.6)');
-    highlightGradient.addColorStop(1, 'rgba(200, 200, 200, 0.3)');
-    
+
+    // Cockpit canopy
+    const roofGrad = ctx.createLinearGradient(bodyX, bodyY + 8, bodyX, bodyY + bodyH * 0.55);
+    roofGrad.addColorStop(0, 'rgba(220, 245, 255, 0.70)');
+    roofGrad.addColorStop(1, 'rgba(40, 65, 130, 0.78)');
+    ctx.fillStyle = roofGrad;
+    ctx.beginPath();
+    ctx.moveTo(bodyX + bodyW * 0.50, bodyY + 10);
+    ctx.lineTo(bodyX + bodyW * 0.72, bodyY + bodyH * 0.36);
+    ctx.lineTo(bodyX + bodyW * 0.58, bodyY + bodyH * 0.56);
+    ctx.lineTo(bodyX + bodyW * 0.42, bodyY + bodyH * 0.56);
+    ctx.lineTo(bodyX + bodyW * 0.28, bodyY + bodyH * 0.36);
+    ctx.closePath();
+    ctx.fill();
+
+    // Body accent highlight
+    const highlightGradient = ctx.createLinearGradient(bodyX, bodyY, bodyX + bodyW, bodyY);
+    highlightGradient.addColorStop(0, 'rgba(255, 255, 255, 0.10)');
+    highlightGradient.addColorStop(0.5, 'rgba(255, 245, 220, 0.45)');
+    highlightGradient.addColorStop(1, 'rgba(255, 255, 255, 0.10)');
     ctx.fillStyle = highlightGradient;
     ctx.beginPath();
-    ctx.moveTo(p.x + p.width * 0.5, p.y + 5);
-    ctx.lineTo(p.x + p.width * 0.85, p.y + p.height * 0.35);
-    ctx.lineTo(p.x + p.width * 0.7, p.y + p.height * 0.5);
-    ctx.lineTo(p.x + p.width * 0.3, p.y + p.height * 0.5);
-    ctx.lineTo(p.x + p.width * 0.15, p.y + p.height * 0.35);
+    ctx.moveTo(bodyX + bodyW * 0.50, bodyY + 8);
+    ctx.lineTo(bodyX + bodyW * 0.82, bodyY + bodyH * 0.34);
+    ctx.lineTo(bodyX + bodyW * 0.68, bodyY + bodyH * 0.64);
+    ctx.lineTo(bodyX + bodyW * 0.32, bodyY + bodyH * 0.64);
+    ctx.lineTo(bodyX + bodyW * 0.18, bodyY + bodyH * 0.34);
     ctx.closePath();
     ctx.fill();
-    
-    // Windows (dark)
-    ctx.fillStyle = 'rgba(0, 50, 100, 0.8)';
+
+    // Center spine line
+    ctx.strokeStyle = 'rgba(170, 220, 255, 0.42)';
+    ctx.lineWidth = 1.2;
     ctx.beginPath();
-    ctx.moveTo(p.x + p.width * 0.5, p.y + 10);
-    ctx.lineTo(p.x + p.width * 0.75, p.y + p.height * 0.35);
-    ctx.lineTo(p.x + p.width * 0.6, p.y + p.height * 0.45);
-    ctx.lineTo(p.x + p.width * 0.4, p.y + p.height * 0.45);
-    ctx.lineTo(p.x + p.width * 0.25, p.y + p.height * 0.35);
-    ctx.closePath();
-    ctx.fill();
-    
-    // Headlights glow
+    ctx.moveTo(bodyX + bodyW * 0.5, bodyY + 10);
+    ctx.lineTo(bodyX + bodyW * 0.5, bodyY + bodyH * 0.90);
+    ctx.stroke();
+
+    // Wheels
+    ctx.fillStyle = 'rgba(8, 8, 10, 0.9)';
+    ctx.fillRect(bodyX - 2, bodyY + bodyH * 0.25, 4, bodyH * 0.22);
+    ctx.fillRect(bodyX - 2, bodyY + bodyH * 0.62, 4, bodyH * 0.22);
+    ctx.fillRect(bodyX + bodyW - 2, bodyY + bodyH * 0.25, 4, bodyH * 0.22);
+    ctx.fillRect(bodyX + bodyW - 2, bodyY + bodyH * 0.62, 4, bodyH * 0.22);
+
+    // Headlights and rear bar
     ctx.shadowBlur = 20;
-    ctx.shadowColor = p.boosted ? '#0ff' : '#fff';
-    ctx.fillStyle = p.boosted ? '#0ff' : '#fff';
-    ctx.fillRect(p.x + 5, p.y + p.height - 10, 8, 8);
-    ctx.fillRect(p.x + p.width - 13, p.y + p.height - 10, 8, 8);
-    
-    // Cyber glow outline
+    ctx.shadowColor = p.boosted ? '#0ff' : '#d8e9ff';
+    ctx.fillStyle = p.boosted ? '#0ff' : '#d8e9ff';
+    ctx.fillRect(bodyX + 5, bodyY + bodyH - 10, 8, 8);
+    ctx.fillRect(bodyX + bodyW - 13, bodyY + bodyH - 10, 8, 8);
+    const brake = Math.max(0.12, p.brakeLightIntensity);
+    ctx.shadowBlur = 8 + brake * 18;
+    ctx.shadowColor = `rgba(255, 30, 30, ${0.4 + brake * 0.6})`;
+    ctx.fillStyle = `rgba(255, 40, 40, ${0.4 + brake * 0.6})`;
+    ctx.fillRect(bodyX + bodyW * 0.33, bodyY + 2, bodyW * 0.34, 3.5);
+
+    // Outline
     ctx.shadowBlur = 0;
-    ctx.strokeStyle = p.boosted ? '#0ff' : '#0aa';
+    ctx.strokeStyle = p.boosted ? '#0ff' : '#7fc9ff';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(p.x + p.width * 0.5, p.y);
-    ctx.lineTo(p.x + p.width * 0.9, p.y + p.height * 0.3);
-    ctx.lineTo(p.x + p.width, p.y + p.height * 0.7);
-    ctx.lineTo(p.x + p.width * 0.8, p.y + p.height);
-    ctx.lineTo(p.x + p.width * 0.2, p.y + p.height);
-    ctx.lineTo(p.x, p.y + p.height * 0.7);
-    ctx.lineTo(p.x + p.width * 0.1, p.y + p.height * 0.3);
+    ctx.moveTo(bodyX + bodyW * 0.5, bodyY);
+    ctx.lineTo(bodyX + bodyW * 0.9, bodyY + bodyH * 0.3);
+    ctx.lineTo(bodyX + bodyW, bodyY + bodyH * 0.7);
+    ctx.lineTo(bodyX + bodyW * 0.8, bodyY + bodyH);
+    ctx.lineTo(bodyX + bodyW * 0.2, bodyY + bodyH);
+    ctx.lineTo(bodyX, bodyY + bodyH * 0.7);
+    ctx.lineTo(bodyX + bodyW * 0.1, bodyY + bodyH * 0.3);
     ctx.closePath();
     ctx.stroke();
-    
+
     ctx.shadowBlur = 0;
     ctx.restore();
 }
 
 function drawTraffic() {
     const ctx = game.ctx;
-    
+
     for (const car of game.traffic) {
         ctx.save();
-        
-        // Apply depth scaling for perspective
-        const scale = car.scale || 1;
+
+        const perspective = projectToRoadPerspective(car.x, car.y, car.width, car.height);
+        const scale = (car.scale || 1) * perspective.scale;
         const scaledWidth = car.width * scale;
         const scaledHeight = car.height * scale;
-        const offsetX = (car.width - scaledWidth) / 2;
-        const offsetY = (car.height - scaledHeight) / 2;
+        const drawX = perspective.x - scaledWidth / 2;
+        const drawY = perspective.y - scaledHeight;
+
+        // Contact shadow keeps cars grounded on the road plane
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
+        ctx.beginPath();
+        ctx.ellipse(
+            perspective.x,
+            perspective.y + Math.max(2, scaledHeight * 0.02),
+            scaledWidth * 0.34,
+            Math.max(1.5, scaledHeight * 0.05),
+            0,
+            0,
+            Math.PI * 2
+        );
+        ctx.fill();
         
-        const drawX = car.x + offsetX;
-        const drawY = car.y + offsetY;
-        
+        // Base paint with metallic top sheen
+        const paint = ctx.createLinearGradient(drawX, drawY, drawX, drawY + scaledHeight);
+        paint.addColorStop(0, 'rgba(255, 255, 255, 0.10)');
+        paint.addColorStop(0.18, car.color);
+        paint.addColorStop(1, 'rgba(0, 0, 0, 0.28)');
+
         if (car.type === 'sedan') {
-            // Modern sedan with rounded edges
-            ctx.fillStyle = car.color;
-            
-            // Main body
+            ctx.fillStyle = paint;
             ctx.beginPath();
-            ctx.roundRect(drawX, drawY + scaledHeight * 0.3, scaledWidth, scaledHeight * 0.7, 5 * scale);
+            ctx.roundRect(drawX + scaledWidth * 0.03, drawY + scaledHeight * 0.18, scaledWidth * 0.94, scaledHeight * 0.78, 6 * scale);
             ctx.fill();
-            
-            // Roof/cabin (darker, rounded)
-            const gradient = ctx.createLinearGradient(drawX, drawY, drawX, drawY + scaledHeight * 0.5);
-            gradient.addColorStop(0, car.color);
-            gradient.addColorStop(1, 'rgba(0, 0, 0, 0.4)');
-            ctx.fillStyle = gradient;
-            ctx.beginPath();
-            ctx.roundRect(drawX + scaledWidth * 0.15, drawY + scaledHeight * 0.05, scaledWidth * 0.7, scaledHeight * 0.4, 5 * scale);
-            ctx.fill();
-            
-            // Windows (dark blue tint)
-            ctx.fillStyle = 'rgba(100, 150, 200, 0.3)';
-            ctx.fillRect(drawX + scaledWidth * 0.2, drawY + scaledHeight * 0.1, scaledWidth * 0.25, scaledHeight * 0.25);
-            ctx.fillRect(drawX + scaledWidth * 0.55, drawY + scaledHeight * 0.1, scaledWidth * 0.25, scaledHeight * 0.25);
-            
-        } else if (car.type === 'suv') {
-            // Boxy SUV/truck
-            ctx.fillStyle = car.color;
-            
-            // Main body (taller)
-            ctx.fillRect(drawX, drawY + scaledHeight * 0.2, scaledWidth, scaledHeight * 0.8);
-            
+
             // Cabin
-            const gradient = ctx.createLinearGradient(drawX, drawY, drawX, drawY + scaledHeight * 0.4);
-            gradient.addColorStop(0, car.color);
-            gradient.addColorStop(1, 'rgba(0, 0, 0, 0.3)');
-            ctx.fillStyle = gradient;
-            ctx.fillRect(drawX + scaledWidth * 0.1, drawY, scaledWidth * 0.8, scaledHeight * 0.35);
-            
-            // Windows
-            ctx.fillStyle = 'rgba(100, 150, 200, 0.4)';
-            ctx.fillRect(drawX + scaledWidth * 0.15, drawY + scaledHeight * 0.05, scaledWidth * 0.3, scaledHeight * 0.22);
-            ctx.fillRect(drawX + scaledWidth * 0.55, drawY + scaledHeight * 0.05, scaledWidth * 0.3, scaledHeight * 0.22);
-            
-        } else if (car.type === 'sports') {
-            // Sleek sports car (low profile)
-            ctx.fillStyle = car.color;
-            
-            // Body (aerodynamic)
+            const cabin = ctx.createLinearGradient(drawX, drawY, drawX, drawY + scaledHeight * 0.45);
+            cabin.addColorStop(0, 'rgba(190, 225, 255, 0.5)');
+            cabin.addColorStop(1, 'rgba(40, 60, 90, 0.65)');
+            ctx.fillStyle = cabin;
             ctx.beginPath();
-            ctx.moveTo(drawX + scaledWidth * 0.5, drawY + scaledHeight * 0.1);
-            ctx.lineTo(drawX + scaledWidth * 0.95, drawY + scaledHeight * 0.4);
-            ctx.lineTo(drawX + scaledWidth, drawY + scaledHeight);
-            ctx.lineTo(drawX, drawY + scaledHeight);
-            ctx.lineTo(drawX + scaledWidth * 0.05, drawY + scaledHeight * 0.4);
+            ctx.roundRect(drawX + scaledWidth * 0.17, drawY + scaledHeight * 0.05, scaledWidth * 0.66, scaledHeight * 0.38, 5 * scale);
+            ctx.fill();
+        } else if (car.type === 'suv') {
+            ctx.fillStyle = paint;
+            ctx.beginPath();
+            ctx.roundRect(drawX + scaledWidth * 0.05, drawY + scaledHeight * 0.14, scaledWidth * 0.90, scaledHeight * 0.84, 4 * scale);
+            ctx.fill();
+
+            ctx.fillStyle = 'rgba(35, 55, 80, 0.58)';
+            ctx.fillRect(drawX + scaledWidth * 0.15, drawY + scaledHeight * 0.04, scaledWidth * 0.70, scaledHeight * 0.32);
+            // Roof rails
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.22)';
+            ctx.fillRect(drawX + scaledWidth * 0.2, drawY + scaledHeight * 0.02, scaledWidth * 0.1, 2 * scale);
+            ctx.fillRect(drawX + scaledWidth * 0.7, drawY + scaledHeight * 0.02, scaledWidth * 0.1, 2 * scale);
+        } else {
+            // sports
+            ctx.fillStyle = paint;
+            ctx.beginPath();
+            ctx.moveTo(drawX + scaledWidth * 0.5, drawY + scaledHeight * 0.08);
+            ctx.lineTo(drawX + scaledWidth * 0.93, drawY + scaledHeight * 0.34);
+            ctx.lineTo(drawX + scaledWidth, drawY + scaledHeight * 0.95);
+            ctx.lineTo(drawX, drawY + scaledHeight * 0.95);
+            ctx.lineTo(drawX + scaledWidth * 0.07, drawY + scaledHeight * 0.34);
             ctx.closePath();
             ctx.fill();
-            
-            // Spoiler
-            ctx.fillRect(drawX + scaledWidth * 0.2, drawY + scaledHeight * 0.05, scaledWidth * 0.6, 3 * scale);
-            
-            // Window (small, dark)
-            ctx.fillStyle = 'rgba(50, 50, 100, 0.6)';
+
+            ctx.fillStyle = 'rgba(40, 60, 95, 0.62)';
             ctx.beginPath();
-            ctx.moveTo(drawX + scaledWidth * 0.5, drawY + scaledHeight * 0.15);
-            ctx.lineTo(drawX + scaledWidth * 0.75, drawY + scaledHeight * 0.35);
-            ctx.lineTo(drawX + scaledWidth * 0.25, drawY + scaledHeight * 0.35);
+            ctx.moveTo(drawX + scaledWidth * 0.5, drawY + scaledHeight * 0.14);
+            ctx.lineTo(drawX + scaledWidth * 0.75, drawY + scaledHeight * 0.33);
+            ctx.lineTo(drawX + scaledWidth * 0.25, drawY + scaledHeight * 0.33);
             ctx.closePath();
             ctx.fill();
+
+            // Rear spoiler lip
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.25)';
+            ctx.fillRect(drawX + scaledWidth * 0.22, drawY + scaledHeight * 0.03, scaledWidth * 0.56, 2.5 * scale);
         }
-        
-        // Bright glowing taillights (RED)
-        ctx.shadowBlur = 15 * scale;
-        ctx.shadowColor = '#ff0000';
-        ctx.fillStyle = '#ff0000';
+
+        // Universal panel lines
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
+        ctx.lineWidth = Math.max(0.8, 1.2 * scale);
         ctx.beginPath();
-        ctx.ellipse(drawX + scaledWidth * 0.15, drawY + 3 * scale, 5 * scale, 3 * scale, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.ellipse(drawX + scaledWidth * 0.85, drawY + 3 * scale, 5 * scale, 3 * scale, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.shadowBlur = 0;
-        
-        // Headlights (WHITE/YELLOW) - when facing away they're not visible, but add glow
-        ctx.shadowBlur = 8 * scale;
-        ctx.shadowColor = '#ffff99';
-        ctx.fillStyle = '#ffff99';
-        ctx.fillRect(drawX + scaledWidth * 0.1, drawY + scaledHeight - 5 * scale, 8 * scale, 3 * scale);
+        ctx.moveTo(drawX + scaledWidth * 0.5, drawY + scaledHeight * 0.08);
+        ctx.lineTo(drawX + scaledWidth * 0.5, drawY + scaledHeight * 0.92);
+        ctx.moveTo(drawX + scaledWidth * 0.22, drawY + scaledHeight * 0.5);
+        ctx.lineTo(drawX + scaledWidth * 0.78, drawY + scaledHeight * 0.5);
+        ctx.stroke();
+
+        // Wheel shadows
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        ctx.fillRect(drawX - 1, drawY + scaledHeight * 0.22, 2, scaledHeight * 0.2);
+        ctx.fillRect(drawX - 1, drawY + scaledHeight * 0.62, 2, scaledHeight * 0.2);
+        ctx.fillRect(drawX + scaledWidth - 1, drawY + scaledHeight * 0.22, 2, scaledHeight * 0.2);
+        ctx.fillRect(drawX + scaledWidth - 1, drawY + scaledHeight * 0.62, 2, scaledHeight * 0.2);
+
+        // Rear lights (top side, facing player)
+        ctx.shadowBlur = 14 * scale;
+        ctx.shadowColor = '#ff1a1a';
+        ctx.fillStyle = '#ff1a1a';
+        ctx.fillRect(drawX + scaledWidth * 0.12, drawY + 2 * scale, 8 * scale, 3.5 * scale);
+        ctx.fillRect(drawX + scaledWidth * 0.72, drawY + 2 * scale, 8 * scale, 3.5 * scale);
+
+        // Front lights (lower side)
+        ctx.shadowBlur = 9 * scale;
+        ctx.shadowColor = '#fff3b0';
+        ctx.fillStyle = '#fff3b0';
+        ctx.fillRect(drawX + scaledWidth * 0.10, drawY + scaledHeight - 5 * scale, 8 * scale, 3 * scale);
         ctx.fillRect(drawX + scaledWidth * 0.82, drawY + scaledHeight - 5 * scale, 8 * scale, 3 * scale);
         ctx.shadowBlur = 0;
-        
-        // Metallic outline
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
-        ctx.lineWidth = 1.5;
+
+        // Outline
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.26)';
+        ctx.lineWidth = Math.max(0.8, 1.4 * scale);
         ctx.strokeRect(drawX, drawY, scaledWidth, scaledHeight);
-        
+
         ctx.restore();
     }
 }
@@ -1424,9 +1572,11 @@ function drawPowerups() {
     
     for (const powerup of game.powerups) {
         ctx.save();
-        
-        const centerX = powerup.x + powerup.width / 2;
-        const centerY = powerup.y + powerup.height / 2;
+
+        const perspective = projectToRoadPerspective(powerup.x, powerup.y, powerup.width, powerup.height);
+        const pScale = perspective.scale;
+        const centerX = perspective.x;
+        const centerY = perspective.y - (powerup.height * pScale * 0.55);
         
         // Intense pulsing glow with strong flicker
         const pulse = Math.sin(powerup.pulseOffset) * 0.5 + 0.7;
@@ -1436,20 +1586,21 @@ function drawPowerups() {
         ctx.shadowBlur = 40 * pulse * flicker;
         ctx.shadowColor = '#ffff00';
         ctx.strokeStyle = `rgba(255, 255, 0, ${0.5 * pulse * flicker})`;
-        ctx.lineWidth = 3;
+        ctx.lineWidth = Math.max(1, 3 * pScale);
         ctx.beginPath();
-        ctx.arc(centerX, centerY, 25 * pulse, 0, Math.PI * 2);
+        ctx.arc(centerX, centerY, 25 * pulse * pScale, 0, Math.PI * 2);
         ctx.stroke();
         
         // Inner electric ring (cyan)
         ctx.strokeStyle = `rgba(0, 255, 255, ${0.6 * pulse * flicker})`;
-        ctx.lineWidth = 2;
+        ctx.lineWidth = Math.max(1, 2 * pScale);
         ctx.beginPath();
-        ctx.arc(centerX, centerY, 18 * pulse, 0, Math.PI * 2);
+        ctx.arc(centerX, centerY, 18 * pulse * pScale, 0, Math.PI * 2);
         ctx.stroke();
         
         // Rotate lightning bolt
         ctx.translate(centerX, centerY);
+        ctx.scale(pScale, pScale);
         ctx.rotate(powerup.rotation);
         
         // JAGGED LIGHTNING BOLT SHAPE
@@ -1532,8 +1683,14 @@ function drawParticles() {
 // LEADERBOARD
 // =======================
 function loadLeaderboard() {
-    const saved = localStorage.getItem('electricRushLeaderboard');
-    return saved ? JSON.parse(saved) : [];
+    try {
+        const saved = localStorage.getItem('electricRushLeaderboard');
+        return saved ? JSON.parse(saved) : [];
+    } catch {
+        // Corrupted data — reset gracefully instead of crashing
+        localStorage.removeItem('electricRushLeaderboard');
+        return [];
+    }
 }
 
 function saveLeaderboard(leaderboard) {
