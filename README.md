@@ -6,6 +6,15 @@
 - **Play (GitHub Pages):** https://dandziewit.github.io/Electric-Rush/
 - **Repo:** dandziewit/Electric-Rush
 
+
+## Screenshots
+
+### Menu
+![Electric Rush - Menu](images/menu.png)
+
+### Gameplay
+![Electric Rush - Gameplay](images/gameplay.png)
+
 ---
 
 ## Features
