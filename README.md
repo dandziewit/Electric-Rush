@@ -136,7 +136,7 @@ Open the URL printed in your terminal.
 
 ## License
 
-MIT — see the `LICENSE` file for details.
+MIT 
 
 ---
 
