@@ -1,154 +1,142 @@
-Electric Rush is a high-performance, browser-based arcade racing game built with HTML5 Canvas and vanilla JavaScript. Players navigate a neon-lit, top-down road, weaving through traffic, collecting lightning boosts, and competing for high scores on a dynamic leaderboard.
+# Electric Rush
 
-This project demonstrates pure frontend architecture with real-time gameplay, procedural difficulty scaling, and mobile-friendly controls—showcasing the ability to engineer interactive systems without external frameworks. Local leaderboard persistence using browser storage illustrates practical client-side state management.
+**Electric Rush** is a high-performance, browser-based **top-down arcade racing game** built with **HTML5 Canvas** and **vanilla JavaScript**. Race down a neon-lit highway, weave through traffic, collect lightning boosts, and chase a high score—optimized for both **desktop and mobile**.
 
-The game combines collision detection, particle effects, and responsive input handling to deliver an engaging, arcade-style experience, highlighting both problem-solving and frontend performance optimization skills.
+## Demo
+- **Play (GitHub Pages):** _Add your GitHub Pages link here_
+- **Repo:** dandziewit/Electric-Rush
 
-🎯 Key Features
+---
 
-Real-time top-down racing loop with collision detection and particle effects
+## Features
 
-Progressive difficulty scaling: speed, spawn rate, lane pressure, and lap timing
+- **Real-time gameplay loop** (update + render) with smooth Canvas 2D rendering
+- **Collision detection** + **particle effects** for responsive arcade feedback
+- **Progressive difficulty scaling** (speed, spawn rate, lane pressure, lap timing)
+- **Lightning boost power-ups** for risk/reward score strategy
+- **Local leaderboard** saved to **`localStorage`**
+- **Multi-platform controls**
+  - Keyboard: **A/D** or **←/→**
+  - Mobile: **swipe left/right**
+- **Audio controls** (start + mute/unmute)
+- **Mobile-optimized responsive layout**
 
-Lightning boost power-ups for risk-reward scoring dynamics
+---
 
-Local leaderboard persistence via browser localStorage
+## Tech Stack
 
-Multi-platform input support: keyboard (A/D, arrow keys) + mobile swipe controls
+- **HTML5 / CSS3 / JavaScript (ES6+)**
+- **Rendering:** Canvas 2D API  
+- **Persistence:** Browser `localStorage`
+- **Audio:** HTML5 `<audio>`
+- **Deploy:** GitHub Pages (optionally via GitHub Actions)
 
-Audio integration with start/mute/unmute functionality
+---
 
-Mobile-optimized responsive layout
+## Project Structure
 
-🧠 Technical Architecture
-
-System Overview:
-Electric Rush uses a single-page, Canvas-driven frontend architecture with a continuous game loop managing state updates, rendering, input handling, and particle effects.
-
-Data Flow:
-
-Input Handling: Keyboard events or swipe gestures captured and normalized
-
-Game Logic Update: Player position, collisions, lap timers, and scoring updated each frame
-
-Rendering Pipeline: Canvas 2D API draws road, traffic, effects, HUD, and score overlays
-
-State Persistence: Local leaderboard entries saved in browser localStorage
-
-Core Components:
-
-Component	Description
-game.js	Game state management, update loop, physics, collision detection, particles
-index.html	Canvas initialization, HUD overlays, audio controls
-style.css	Responsive layout, neon visual styling
-localStorage	Persistent leaderboard storage
-🛠 Tech Stack
-
-Frontend: HTML5, CSS3, JavaScript (ES6+)
-
-Rendering: Canvas 2D API
-
-State Management: Browser localStorage
-
-Audio/Media: HTML5 <audio> API
-
-Deployment/CI: GitHub Pages, optional GitHub Actions
-
-Tools: Node.js (serve) for local testing, Python HTTP server for quick deployment
-
-📊 Results & Impact
-
-Fully functional framework-free game engine running in the browser
-
-Smooth 60 FPS gameplay loop on desktop and mobile devices
-
-Persistent leaderboard allows competitive scoring for repeat engagement
-
-Modular code structure demonstrates scalable architecture design
-
-⚙️ Installation & Setup
-
-No build step required. Static web project.
-
-Option A – Open directly:
-
-Download or clone repository
-
-Open index.html in your browser
-
-Option B – Run a local server (recommended):
-
-Python:
-
-python -m http.server 8080
-
-Open: http://localhost:8080
-
-Node (serve):
-
-npx serve .
-
-Open the URL shown in terminal
-
-🔍 Controls
-
-Keyboard: A / D or Left / Right arrows
-
-Touch (mobile): Swipe left / right
-
-Audio: Mute/unmute button in the UI overlay
-
-🔍 Lessons Learned
-
-Mastered Canvas 2D API optimizations for real-time rendering
-
-Implemented deterministic collision detection in a dynamic environment
-
-Learned to scale difficulty algorithmically for engaging gameplay
-
-Balanced performance vs. feature complexity on desktop and mobile browsers
-
-Gained experience in client-side state persistence with localStorage
-
-🚀 Future Improvements
-
-Modularize game.js into state, rendering, and system modules
-
-Add deterministic balancing tests for lap difficulty progression
-
-Integrate procedural track generation for dynamic gameplay
-
-Implement AI-driven traffic patterns for smarter challenges
-
-Add cloud-based leaderboard for global competition
-
-📁 Project Structure
+```
 Electric Rush/
-├─ .github/workflows/deploy.yml    # GitHub Pages CI workflow
-├─ .nojekyll                        # Bypass Jekyll for Pages deployment
-├─ index.html                        # Game shell, HUD, and canvas
-├─ style.css                         # Styling & responsive layout
-├─ game.js                           # Game logic, update loop, rendering
-├─ music.mp3                         # Background audio
-📌 Deployment (GitHub Pages)
+├─ .github/workflows/deploy.yml     # GitHub Pages CI workflow
+├─ .nojekyll                        # Bypass Jekyll processing for Pages
+├─ index.html                       # Game shell, HUD, and canvas
+├─ style.css                        # Styling & responsive layout
+├─ game.js                          # Game loop, logic, rendering, collisions, particles
+├─ music.mp3                        # Background audio
+```
 
-Repository Settings → Pages → Source: Deploy from a branch
+---
 
-Branch: main / root
+## How It Works (Architecture)
 
-Save changes
+Electric Rush is a single-page, Canvas-driven game with a continuous loop that manages:
 
-Notes:
+1. **Input handling**  
+   Keyboard events and mobile swipe gestures are captured and normalized.
 
-.nojekyll ensures all files bypass Jekyll processing
+2. **Game state updates**  
+   Player movement, collisions, lap timing, score updates, and difficulty scaling are processed each frame.
 
-Optional: Use GitHub Actions for automated deployment
+3. **Rendering pipeline**  
+   The Canvas 2D API draws the road, traffic, effects, HUD, and score overlays.
 
-👤 Author
+4. **Persistence**  
+   Leaderboard entries are stored locally using browser `localStorage`.
 
-Daniel Dziewit – Aspiring IT & AI Engineer | Frontend Game Developer
+---
 
-GitHub: github.com/yourusername
+## Getting Started
 
+No build step required—this is a static project.
 
-Developed Electric Rush as a showcase of frontend engineering, real-time gameplay mechanics, and client-side state management. This project highlights both technical skill and creative problem-solving, designed to be scalable, performant, and recruiter-ready.
+### Option A: Run directly
+1. Clone or download the repository  
+2. Open `index.html` in your browser
+
+### Option B: Run a local server (recommended)
+
+**Python**
+```bash
+python -m http.server 8080
+```
+Then open:
+- `http://localhost:8080`
+
+**Node (serve)**
+```bash
+npx serve .
+```
+Open the URL printed in your terminal.
+
+---
+
+## Controls
+
+- **Keyboard:** A / D or Left / Right arrows  
+- **Mobile:** Swipe left / right  
+- **Audio:** Use the in-game UI button to mute/unmute
+
+---
+
+## Results
+
+- Framework-free game engine running fully in the browser
+- Smooth **60 FPS** gameplay loop on desktop and mobile
+- Persistent leaderboard encourages repeat play and score chasing
+- Modular, readable structure that demonstrates scalable frontend architecture
+
+---
+
+## Lessons Learned
+
+- Optimized Canvas 2D rendering for real-time gameplay
+- Built deterministic collision detection for a dynamic environment
+- Designed algorithmic difficulty scaling to keep gameplay engaging
+- Balanced performance vs. visual effects across desktop and mobile
+- Implemented client-side persistence using `localStorage`
+
+---
+
+## Roadmap / Future Improvements
+
+- Split `game.js` into modules (state, rendering, systems)
+- Add balancing tests for lap/difficulty progression
+- Add procedural track generation
+- Implement smarter traffic patterns / AI behavior
+- Add a cloud-based leaderboard for global competition
+
+---
+
+## License
+
+MIT — see the `LICENSE` file for details.
+
+---
+
+## Author
+
+**Daniel Dziewit** — Aspiring IT & AI Engineer | Frontend Game Developer  
+- GitHub: `https://github.com/dandziewit`
+- Project: Electric Rush
+
+> Built as a showcase of frontend engineering, real-time gameplay systems, and client-side state management.
