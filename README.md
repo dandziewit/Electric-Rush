@@ -3,7 +3,7 @@
 **Electric Rush** is a high-performance, browser-based **top-down arcade racing game** built with **HTML5 Canvas** and **vanilla JavaScript**. Race down a neon-lit highway, weave through traffic, collect lightning boosts, and chase a high score—optimized for both **desktop and mobile**.
 
 ## Demo
-- **Play (GitHub Pages):** _Add your GitHub Pages link here_
+- **Play (GitHub Pages):** https://dandziewit.github.io/Electric-Rush/
 - **Repo:** dandziewit/Electric-Rush
 
 ---
@@ -37,8 +37,6 @@
 
 ```
 Electric Rush/
-├─ .github/workflows/deploy.yml     # GitHub Pages CI workflow
-├─ .nojekyll                        # Bypass Jekyll processing for Pages
 ├─ index.html                       # Game shell, HUD, and canvas
 ├─ style.css                        # Styling & responsive layout
 ├─ game.js                          # Game loop, logic, rendering, collisions, particles
